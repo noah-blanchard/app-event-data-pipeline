@@ -4,17 +4,21 @@ Batch data pipeline that ingests mobile app usage events, cleans them with PySpa
 
 Built as a compact, reproducible example of a production-style ETL: layered storage (bronze / silver / gold), idempotent daily runs, date partitioning, documented data model and proactive anomaly detection. Everything starts with one command.
 
-![Python](https://img.shields.io/badge/Python-3.11-blue)
-![PySpark](https://img.shields.io/badge/PySpark-3.5-orange)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791)
+![Python](https://img.shields.io/badge/Python-3.12-blue)
+![PySpark](https://img.shields.io/badge/PySpark-4.1-orange)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-336791)
+![Java](https://img.shields.io/badge/Java-17-red)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED)
+![uv](https://img.shields.io/badge/uv-managed-DE5FE9)
 
 ---
 
 ## Table of contents
 
 - [Architecture](#architecture)
+- [Tech stack](#tech-stack)
 - [Quick start](#quick-start)
+- [Local development](#local-development)
 - [Pipeline stages](#pipeline-stages)
 - [Data model](#data-model)
 - [Data quality checks](#data-quality-checks)
@@ -50,6 +54,23 @@ flowchart LR
 
 ---
 
+## Tech stack
+
+Versions are chosen together, starting from the most constraining component (Spark), and pinned for reproducibility.
+
+| Component | Version | Why |
+|---|---|---|
+| **Apache Spark / PySpark** | 4.1 | Current stable minor release, supported until mid-2027. 3.5 LTS would be the conservative alternative |
+| **Python** | 3.12 | Supported by Spark 4.x and the data ecosystem (pyarrow, pandas), security fixes until October 2028 |
+| **Java** | 17 | Runtime required by Spark 4.x |
+| **PostgreSQL** | 18 | Current stable major version, supported until November 2030 |
+| **uv** | latest | Python version, virtual environment and dependency management, with a lockfile |
+| **Docker Compose** | latest | Runs PostgreSQL and the Spark runner with no local install |
+
+Pinned in: `.python-version` (Python), `pyproject.toml` + `uv.lock` (Python dependencies), `Dockerfile` (Java, Spark), `docker-compose.yml` (PostgreSQL image tag).
+
+---
+
 ## Quick start
 
 **Requirements:** Docker and Docker Compose. Nothing else to install.
@@ -78,6 +99,21 @@ Open a SQL shell on the warehouse:
 ```bash
 docker compose exec postgres psql -U pipeline -d warehouse
 ```
+
+---
+
+## Local development
+
+For working on the code outside Docker (editor support, fast iteration on the generator and unit tests). Requires [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync                 # installs Python 3.12 if needed, creates .venv, installs locked dependencies
+uv run ruff check .     # lint
+uv run ruff format .    # format
+uv run pytest           # tests
+```
+
+Always run project commands through `uv run` so they use the pinned interpreter and dependencies. Spark jobs and the warehouse run in Docker; there is no need to install Java, Spark or PostgreSQL locally.
 
 ---
 
@@ -192,6 +228,8 @@ rows=612,430  expected=871,200 ± 30%  (trailing 7-day avg)
 
 **Validate at write time.** Values such as timestamps are normalized once, when they enter the system, so read-time queries compare clean typed columns and can use indexes instead of casting every row.
 
+**Pinned versions.** Python, dependencies, Java, Spark and PostgreSQL are all pinned, so the pipeline behaves the same on any machine and over time.
+
 ---
 
 ## Example queries
@@ -249,9 +287,12 @@ More in [`sql/`](sql/).
 
 ```
 app-event-data-pipeline/
-├── docker-compose.yml          # PostgreSQL + Spark runner
-├── Dockerfile                  # Python 3.11, PySpark, Java runtime
+├── docker-compose.yml          # PostgreSQL 18 + Spark runner
+├── Dockerfile                  # Python 3.12, PySpark 4.1, Java 17
 ├── Makefile                    # generate, run, run-all, check, test
+├── pyproject.toml              # project metadata and dependencies
+├── uv.lock                     # exact dependency versions (committed)
+├── .python-version             # pinned Python version
 ├── .env.example
 ├── generator/
 │   └── generate_events.py      # synthetic events + injected defects
@@ -284,6 +325,7 @@ All settings come from environment variables (see `.env.example`).
 | `EVENTS_PER_DAY` | `150000` | Generator volume |
 | `NUM_USERS` | `20000` | Distinct users in the generator |
 | `DEFECT_RATE` | `0.02` | Share of events with an injected defect |
+| `SEED` | `42` | Random seed, makes generated data reproducible |
 | `LOOKBACK_DAYS` | `2` | Partitions reprocessed per run for late events |
 | `ALERT_WEBHOOK_URL` | empty | Discord or Slack webhook; alerts are logged only if empty |
 
@@ -292,7 +334,11 @@ All settings come from environment variables (see `.env.example`).
 ## Testing
 
 ```bash
+# In Docker (full suite, including Spark tests)
 docker compose run --rm pipeline make test
+
+# Locally (generator and pure-Python tests)
+uv run pytest
 ```
 
 - Unit tests on transformations using small in-memory Spark DataFrames: deduplication, timestamp parsing, rejection reasons
@@ -303,7 +349,7 @@ docker compose run --rm pipeline make test
 
 ## Roadmap
 
-- [ ] v1: generator, PySpark bronze → silver → gold, PostgreSQL warehouse, quality checks, alerting, Docker Compose
+- [ ] v1 (in progress): generator, PySpark bronze → silver → gold, PostgreSQL warehouse, quality checks, alerting, Docker Compose
 - [ ] v2: replace the Parquet folders with **Apache Iceberg** tables on **MinIO** (S3-compatible), using time travel and schema evolution
 - [ ] v2: schedule daily runs and backfills with **Apache Airflow**
 - [ ] v3: streaming ingestion with **Kafka** and **Flink** for near real-time metrics
