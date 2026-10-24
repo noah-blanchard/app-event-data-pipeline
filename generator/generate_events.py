@@ -14,7 +14,19 @@ START_DATE = date(2026, 10, 20)
 DAYS = 3
 NUM_USERS = 20_000
 NUM_APPS = 50
+DEFECT_RATE = 0.02
 MS_PER_HOUR = 60 * 60 * 1000
+
+# Fields that must never be null. os_version, duration_ms and country are
+# nullable by design, so a null there is not a defect.
+REQUIRED_FIELDS = [
+    "event_id",
+    "user_id",
+    "device_model",
+    "app_id",
+    "event_type",
+    "event_ts",
+]
 
 # Relative activity per hour of the day (UTC): quiet nights, a lunch peak
 # and a bigger evening peak.
@@ -110,6 +122,29 @@ def make_duration_ms(rng: random.Random, event_type: str) -> int | None:
     return round(rng.lognormvariate(math.log(median_ms), sigma))
 
 
+def inject_defect(rng: random.Random, event: dict) -> None:
+    """Corrupt the event in place with one defect the quality layer must catch."""
+    defects = ["null_required_field", "malformed_timestamp", "future_timestamp"]
+    # A negative duration only makes sense on events that have a duration.
+    duration_ms = event["duration_ms"]
+    if duration_ms is not None:
+        defects.append("negative_duration")
+
+    defect = rng.choice(defects)
+    if defect == "null_required_field":
+        event[rng.choice(REQUIRED_FIELDS)] = None
+    elif defect == "malformed_timestamp":
+        ts = datetime.fromisoformat(event["event_ts"])
+        event["event_ts"] = ts.strftime("%d/%m/%Y %H:%M:%S")
+    elif defect == "future_timestamp":
+        # A device with a broken clock: months to years ahead.
+        ts = datetime.fromisoformat(event["event_ts"])
+        ts += timedelta(days=rng.randint(30, 3_650))
+        event["event_ts"] = ts.isoformat(timespec="milliseconds")
+    elif defect == "negative_duration" and duration_ms is not None:
+        event["duration_ms"] = -duration_ms
+
+
 def partition_path(event_date: date) -> Path:
     """Hive-style partition: data/bronze/event_date=YYYY-MM-DD/events.jsonl."""
     return BRONZE_DIR / f"event_date={event_date.isoformat()}" / "events.jsonl"
@@ -134,7 +169,12 @@ def main() -> None:
         # One RNG per day: a partition depends only on (SEED, date), so
         # regenerating a single day gives the same file as a full run.
         rng = random.Random(f"{SEED}-{event_date.isoformat()}")
-        events = [make_event(rng, event_date, users) for _ in range(EVENTS_PER_DAY)]
+        events = []
+        for _ in range(EVENTS_PER_DAY):
+            event = make_event(rng, event_date, users)
+            if rng.random() < DEFECT_RATE:
+                inject_defect(rng, event)
+            events.append(event)
         path = partition_path(event_date)
         write_jsonl(events, path)
         print(f"Wrote {len(events)} events to {path}")
