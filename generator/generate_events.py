@@ -15,6 +15,9 @@ DAYS = 3
 NUM_USERS = 20_000
 NUM_APPS = 50
 DEFECT_RATE = 0.02
+# Delivery issues, separate from corrupted content.
+DUPLICATE_RATE = 0.01
+LATE_RATE = 0.02
 MS_PER_HOUR = 60 * 60 * 1000
 
 # Fields that must never be null. os_version, duration_ms and country are
@@ -145,6 +148,40 @@ def inject_defect(rng: random.Random, event: dict) -> None:
         event["duration_ms"] = -duration_ms
 
 
+def generate_day(event_date: date, users: list[dict]) -> tuple[list, list]:
+    """Generate the events that happened on a day, split into (on_time, late).
+
+    Late events are delivered in the next day's batch.
+    """
+    # One RNG per day: the result depends only on (SEED, date), so a day can
+    # be regenerated on its own and gives the same events as a full run.
+    rng = random.Random(f"{SEED}-{event_date.isoformat()}")
+    on_time, late = [], []
+    for _ in range(EVENTS_PER_DAY):
+        event = make_event(rng, event_date, users)
+        if rng.random() < DEFECT_RATE:
+            inject_defect(rng, event)
+        if rng.random() < LATE_RATE:
+            late.append(event)
+        else:
+            on_time.append(event)
+    return on_time, late
+
+
+def build_batch(batch_date: date, users: list[dict]) -> list[dict]:
+    """Build the batch received on a day: its on-time events, the late events
+    of the previous day and some duplicates, in no particular order."""
+    on_time, _ = generate_day(batch_date, users)
+    _, late_from_previous_day = generate_day(batch_date - timedelta(days=1), users)
+    batch = on_time + late_from_previous_day
+
+    rng = random.Random(f"{SEED}-batch-{batch_date.isoformat()}")
+    # At-least-once delivery: some events are sent twice, unchanged.
+    batch += [event for event in batch if rng.random() < DUPLICATE_RATE]
+    rng.shuffle(batch)
+    return batch
+
+
 def partition_path(event_date: date) -> Path:
     """Hive-style partition: data/bronze/event_date=YYYY-MM-DD/events.jsonl."""
     return BRONZE_DIR / f"event_date={event_date.isoformat()}" / "events.jsonl"
@@ -165,17 +202,9 @@ def main() -> None:
     # the same profile across all partitions.
     users = make_users(random.Random(f"{SEED}-users"))
     for offset in range(DAYS):
-        event_date = START_DATE + timedelta(days=offset)
-        # One RNG per day: a partition depends only on (SEED, date), so
-        # regenerating a single day gives the same file as a full run.
-        rng = random.Random(f"{SEED}-{event_date.isoformat()}")
-        events = []
-        for _ in range(EVENTS_PER_DAY):
-            event = make_event(rng, event_date, users)
-            if rng.random() < DEFECT_RATE:
-                inject_defect(rng, event)
-            events.append(event)
-        path = partition_path(event_date)
+        batch_date = START_DATE + timedelta(days=offset)
+        events = build_batch(batch_date, users)
+        path = partition_path(batch_date)
         write_jsonl(events, path)
         print(f"Wrote {len(events)} events to {path}")
 
