@@ -1,6 +1,7 @@
 """Generate synthetic mobile app usage events as JSON lines (bronze layer)."""
 
 import json
+import math
 import random
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
@@ -23,6 +24,24 @@ HOURLY_WEIGHTS = [
     11, 10, 8, 7, 7, 8,  # 12-17: lunch peak, afternoon
     10, 12, 13, 12, 9, 5,  # 18-23: evening peak
 ]  # fmt: skip
+
+# Relative frequency of each event type: crashes are rare.
+EVENT_TYPE_WEIGHTS = {
+    "screen_view": 50,
+    "click": 30,
+    "app_open": 10,
+    "app_close": 9.5,
+    "crash": 0.5,
+}
+EVENT_TYPES = list(EVENT_TYPE_WEIGHTS)
+EVENT_WEIGHTS = list(EVENT_TYPE_WEIGHTS.values())
+
+# Log-normal duration per event type, as (median_ms, sigma). A larger sigma
+# gives a longer tail. Other event types have no duration.
+DURATION_PARAMS = {
+    "screen_view": (8_000, 1.0),  # time spent on a screen
+    "app_close": (120_000, 1.2),  # session length
+}
 
 # Each device model only runs the OS versions it supports.
 DEVICE_OS_VERSIONS = {
@@ -67,6 +86,7 @@ def make_event(rng: random.Random, event_date: date, users: list[dict]) -> dict:
     event_ts = day_start + timedelta(
         hours=hour, milliseconds=rng.randrange(MS_PER_HOUR)
     )
+    event_type = rng.choices(EVENT_TYPES, weights=EVENT_WEIGHTS)[0]
     return {
         # Derived from the seeded RNG: uuid4() reads OS entropy and changes every run.
         "event_id": str(uuid.UUID(int=rng.getrandbits(128), version=4)),
@@ -74,11 +94,20 @@ def make_event(rng: random.Random, event_date: date, users: list[dict]) -> dict:
         "device_model": user["device_model"],
         "os_version": user["os_version"],
         "app_id": rng.choices(APP_IDS, weights=APP_WEIGHTS)[0],
-        "event_type": "app_close",
+        "event_type": event_type,
         "event_ts": event_ts.isoformat(timespec="milliseconds"),
-        "duration_ms": 42_000,
+        "duration_ms": make_duration_ms(rng, event_type),
         "country": user["country"],
     }
+
+
+def make_duration_ms(rng: random.Random, event_type: str) -> int | None:
+    """Heavy-tailed duration for screen views and sessions, None otherwise."""
+    if event_type not in DURATION_PARAMS:
+        return None
+    median_ms, sigma = DURATION_PARAMS[event_type]
+    # The median of a log-normal is exp(mu), so mu = log(median).
+    return round(rng.lognormvariate(math.log(median_ms), sigma))
 
 
 def partition_path(event_date: date) -> Path:
