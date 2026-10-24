@@ -35,7 +35,7 @@ Built as a compact, reproducible example of a production-style ETL: layered stor
 
 ```mermaid
 flowchart LR
-    G[Event generator<br/>Python] -->|JSON lines| B[(Bronze<br/>raw files<br/>partitioned by date)]
+    G[Event generator<br/>Python] -->|JSON lines| B[(Bronze<br/>raw files<br/>partitioned by batch date)]
     B --> S[PySpark job<br/>clean + dedupe + type]
     S --> SV[(Silver<br/>Parquet<br/>partitioned by date)]
     SV --> A[PySpark job<br/>aggregate]
@@ -48,7 +48,7 @@ flowchart LR
 
 | Layer | Storage | Content |
 |---|---|---|
-| **Bronze** | JSON lines on disk, `data/bronze/event_date=YYYY-MM-DD/` | Raw events exactly as received, never modified |
+| **Bronze** | JSON lines on disk, `data/bronze/batch_date=YYYY-MM-DD/` | Raw events exactly as received, grouped by arrival day, never modified |
 | **Silver** | Parquet, `data/silver/event_date=YYYY-MM-DD/` + `silver.events` table | Typed, validated, deduplicated events |
 | **Gold** | PostgreSQL `gold.*` tables | Business aggregates ready for reporting |
 
@@ -214,7 +214,7 @@ rows=612,430  expected=871,200 ± 30%  (trailing 7-day avg)
 
 ## Design choices
 
-**Partitioning by event date.** Almost every query filters on a date range. Partitioning by `event_date` lets Spark prune files and lets PostgreSQL scan only the relevant partitions. The partition key is derived from the device timestamp, not the ingestion time, so metrics describe when usage happened.
+**Partitioning by event date.** Almost every query filters on a date range. Partitioning by `event_date` lets Spark prune files and lets PostgreSQL scan only the relevant partitions. The partition key is derived from the device timestamp, not the ingestion time, so metrics describe when usage happened. Bronze is the exception: it stores events as received, so it is partitioned by `batch_date` (arrival day), and a late event sits in the batch it arrived in until silver moves it to its `event_date`.
 
 **Late-arriving events.** Events can reach the pipeline days after they happened. Each run reprocesses a configurable lookback window (default: 2 days) and rewrites the affected partitions, so late events land in the correct day.
 

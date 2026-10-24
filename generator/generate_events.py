@@ -182,9 +182,12 @@ def build_batch(batch_date: date, users: list[dict]) -> list[dict]:
     return batch
 
 
-def partition_path(event_date: date) -> Path:
-    """Hive-style partition: data/bronze/event_date=YYYY-MM-DD/events.jsonl."""
-    return BRONZE_DIR / f"event_date={event_date.isoformat()}" / "events.jsonl"
+def partition_path(batch_date: date) -> Path:
+    """Hive-style partition: data/bronze/batch_date=YYYY-MM-DD/events.jsonl.
+
+    Bronze stores events as received, so it is partitioned by arrival day.
+    """
+    return BRONZE_DIR / f"batch_date={batch_date.isoformat()}" / "events.jsonl"
 
 
 def write_jsonl(events: list[dict], path: Path) -> None:
