@@ -13,7 +13,16 @@ START_DATE = date(2026, 10, 20)
 DAYS = 3
 NUM_USERS = 20_000
 NUM_APPS = 50
-MS_PER_DAY = 24 * 60 * 60 * 1000
+MS_PER_HOUR = 60 * 60 * 1000
+
+# Relative activity per hour of the day (UTC): quiet nights, a lunch peak
+# and a bigger evening peak.
+HOURLY_WEIGHTS = [
+    3, 2, 1, 1, 1, 2,  # 00-05: night
+    4, 7, 9, 8, 7, 8,  # 06-11: morning
+    11, 10, 8, 7, 7, 8,  # 12-17: lunch peak, afternoon
+    10, 12, 13, 12, 9, 5,  # 18-23: evening peak
+]  # fmt: skip
 
 # Each device model only runs the OS versions it supports.
 DEVICE_OS_VERSIONS = {
@@ -53,7 +62,11 @@ def make_event(rng: random.Random, event_date: date, users: list[dict]) -> dict:
     """Build one valid event with every field of the bronze schema."""
     user = rng.choice(users)
     day_start = datetime.combine(event_date, time.min, tzinfo=UTC)
-    event_ts = day_start + timedelta(milliseconds=rng.randrange(MS_PER_DAY))
+    # Pick the hour from the daily profile, then a uniform instant within it.
+    hour = rng.choices(range(24), weights=HOURLY_WEIGHTS)[0]
+    event_ts = day_start + timedelta(
+        hours=hour, milliseconds=rng.randrange(MS_PER_HOUR)
+    )
     return {
         # Derived from the seeded RNG: uuid4() reads OS entropy and changes every run.
         "event_id": str(uuid.UUID(int=rng.getrandbits(128), version=4)),
