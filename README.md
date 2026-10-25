@@ -353,7 +353,7 @@ uv run pytest
 - [ ] v2: replace the Parquet folders with **Apache Iceberg** tables on **MinIO** (S3-compatible), using time travel and schema evolution
 - [ ] v2: schedule daily runs and backfills with **Apache Airflow**
 - [ ] v3: streaming ingestion with **Kafka** and **Flink** for near real-time metrics
-- [ ] v3: CI with **GitHub Actions** running the test suite on every push
+- [x] CI with **GitHub Actions**: lint, format check and tests on every pull request and push to `master`
 
 ---
 
