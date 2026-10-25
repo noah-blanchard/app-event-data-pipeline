@@ -1,9 +1,14 @@
 """Bronze to silver: validate, deduplicate and type raw events."""
 
+import argparse
+import os
+from datetime import UTC, date, datetime, timedelta
+
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
 from jobs.common.schemas import BRONZE_SCHEMA, CORRUPT_RECORD
+from jobs.common.spark import get_spark
 
 BRONZE_DIR = "data/bronze"
 SILVER_DIR = "data/silver"
@@ -138,3 +143,72 @@ def write_partitions(df: DataFrame, path: str, partition_column: str) -> None:
         .partitionBy(partition_column)
         .parquet(path)
     )
+
+
+def run(spark: SparkSession, run_date: date, lookback_days: int) -> None:
+    """Process the batch received on run_date.
+
+    Events arrive up to lookback_days late, so the event_date partitions from
+    run_date - lookback_days to run_date are rebuilt in full from every batch
+    that can contain them. Older partitions are already complete: they are
+    left untouched.
+    """
+    window_start = run_date - timedelta(days=lookback_days)
+    # Late events of a day can sit in the next lookback_days batches. On a
+    # daily run they do not exist yet; on a re-run or a backfill they do, and
+    # skipping them would truncate the rebuilt days. Reading them makes the
+    # result independent of the order in which dates are processed.
+    last_batch = run_date + timedelta(days=lookback_days)
+    in_window = F.col("batch_date").between(window_start, last_batch)
+    # Used twice (silver and quarantine): keep it in memory instead of
+    # reading and parsing the JSON files again.
+    df = add_rejection_reason(parse_event_ts(read_bronze(spark).filter(in_window)))
+    df.cache()
+
+    # Late events of days before the window would overwrite complete
+    # partitions with a handful of rows: keep only the rebuilt days.
+    silver = build_silver(df).filter(
+        F.col("event_date").between(window_start, run_date)
+    )
+    write_partitions(silver, SILVER_DIR, "event_date")
+
+    # Rejections of earlier batches were stored when those batches arrived.
+    quarantine = build_quarantine(df.filter(F.col("batch_date") == run_date))
+    write_partitions(quarantine, QUARANTINE_DIR, "batch_date")
+    df.unpersist()
+
+
+def parse_args() -> argparse.Namespace:
+    yesterday = datetime.now(UTC).date() - timedelta(days=1)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        default=yesterday,
+        help="batch date to process, YYYY-MM-DD (default: yesterday, UTC)",
+    )
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=int(os.environ.get("LOOKBACK_DAYS", "2")),
+        help="days of late events to reprocess (default: $LOOKBACK_DAYS or 2)",
+    )
+    args = parser.parse_args()
+    if args.lookback_days < 0:
+        parser.error("--lookback-days must be 0 or more")
+    return args
+
+
+def main() -> None:
+    args = parse_args()
+    spark = get_spark("bronze_to_silver")
+    run(spark, args.date, args.lookback_days)
+    window_start = args.date - timedelta(days=args.lookback_days)
+    print(
+        f"Processed batch {args.date}, rebuilt event dates {window_start}..{args.date}"
+    )
+    spark.stop()
+
+
+if __name__ == "__main__":
+    main()
