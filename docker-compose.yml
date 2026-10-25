@@ -1,0 +1,9 @@
+services:
+  pipeline:
+    build: .
+    # Share the project folder with the container: code edits are seen
+    # immediately, and generated data lands back in ./data on the host.
+    volumes:
+      - .:/app
+    ports:
+      - "4040:4040" # Spark UI

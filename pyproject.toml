@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Batch data pipeline for mobile app usage events"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pyspark>=4.1.3,<4.2",
+]
 
 [dependency-groups]
 dev = [
