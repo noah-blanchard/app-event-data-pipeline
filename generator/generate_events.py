@@ -1,20 +1,35 @@
 """Generate synthetic mobile app usage events as JSON lines (bronze layer)."""
 
+import argparse
 import json
 import math
+import os
 import random
+import sys
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
+
+def read_env[T: (int, float)](name: str, default: T) -> T:
+    """Read a numeric setting from the environment, falling back to a default."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return type(default)(raw)
+    except ValueError:
+        sys.exit(f"{name} must be a {type(default).__name__}, got {raw!r}")
+
+
+# Settings that describe the environment come from environment variables.
+SEED = read_env("SEED", 42)
+EVENTS_PER_DAY = read_env("EVENTS_PER_DAY", 150_000)
+NUM_USERS = read_env("NUM_USERS", 20_000)
+DEFECT_RATE = read_env("DEFECT_RATE", 0.02)
+
 BRONZE_DIR = Path("data/bronze")
-SEED = 42
-EVENTS_PER_DAY = 1_000
-START_DATE = date(2026, 10, 20)
-DAYS = 3
-NUM_USERS = 20_000
 NUM_APPS = 50
-DEFECT_RATE = 0.02
 # Delivery issues, separate from corrupted content.
 DUPLICATE_RATE = 0.01
 LATE_RATE = 0.02
@@ -200,12 +215,41 @@ def write_jsonl(events: list[dict], path: Path) -> None:
             f.write(json.dumps(event) + "\n")
 
 
+def parse_args() -> argparse.Namespace:
+    """Read the dates to generate from the command line: they describe this run."""
+    yesterday = datetime.now(UTC).date() - timedelta(days=1)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--start-date",
+        type=date.fromisoformat,
+        default=yesterday,
+        help="first batch date, YYYY-MM-DD (default: yesterday, UTC)",
+    )
+    parser.add_argument(
+        "--days", type=int, default=1, help="number of daily batches (default: 1)"
+    )
+    args = parser.parse_args()
+    if args.days < 1:
+        parser.error("--days must be at least 1")
+    return args
+
+
+def check_settings() -> None:
+    """Stop early with a clear message instead of generating wrong data."""
+    if EVENTS_PER_DAY < 1 or NUM_USERS < 1:
+        sys.exit("EVENTS_PER_DAY and NUM_USERS must be at least 1")
+    if not 0 <= DEFECT_RATE <= 1:
+        sys.exit(f"DEFECT_RATE must be between 0 and 1, got {DEFECT_RATE}")
+
+
 def main() -> None:
+    args = parse_args()
+    check_settings()
     # The user pool has its own seed, independent of the day: a user keeps
     # the same profile across all partitions.
     users = make_users(random.Random(f"{SEED}-users"))
-    for offset in range(DAYS):
-        batch_date = START_DATE + timedelta(days=offset)
+    for offset in range(args.days):
+        batch_date = args.start_date + timedelta(days=offset)
         events = build_batch(batch_date, users)
         path = partition_path(batch_date)
         write_jsonl(events, path)
