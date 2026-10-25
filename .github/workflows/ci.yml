@@ -14,6 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Spark runs on the JVM: pin the same Java version as the Dockerfile.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+
       # setup-uv publishes no moving major tag (v10), only exact versions.
       - uses: astral-sh/setup-uv@v10.3.2
         with:

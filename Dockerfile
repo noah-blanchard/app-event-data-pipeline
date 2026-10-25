@@ -10,8 +10,11 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 
 # Keep the virtual environment outside /app: the project folder is mounted
 # there at runtime and would hide it, and the Windows .venv is unusable here.
+# No __pycache__ either: the container would write it into the shared folder,
+# where the host Python would pick up files compiled for /app paths.
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv \
-    UV_PYTHON_DOWNLOADS=never
+    UV_PYTHON_DOWNLOADS=never \
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 

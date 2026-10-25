@@ -8,6 +8,7 @@
 - Windows, PowerShell. Give test commands in PowerShell syntax.
 - Python 3.12 managed by uv. Always go through `uv run` (e.g. `uv run python ...`, `uv run pytest`).
 - Lint and format: `uv run ruff check .` and `uv run ruff format --check .` must pass.
+- Spark needs Java, which only the Docker image has: run Spark code and the full test suite with `docker compose run --rm pipeline uv run ...` (e.g. `uv run pytest`). On Windows, `uv run pytest` skips the Spark tests.
 
 ## Working rules
 - One step at a time. Wait for the user's "ok" before moving to the next one.
