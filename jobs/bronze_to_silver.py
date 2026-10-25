@@ -1,11 +1,12 @@
 """Bronze to silver: validate, deduplicate and type raw events."""
 
-from pyspark.sql import DataFrame, SparkSession, Window
+from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
 from jobs.common.schemas import BRONZE_SCHEMA, CORRUPT_RECORD
 
 BRONZE_DIR = "data/bronze"
+SILVER_DIR = "data/silver"
 # ISO 8601 with milliseconds and a UTC offset, as written by the generator.
 EVENT_TS_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
 # Columns that are NOT NULL in silver.events.
@@ -48,6 +49,11 @@ def parse_event_ts(df: DataFrame) -> DataFrame:
     return df.withColumn("parsed_ts", parsed_ts).withColumn("event_date", event_date)
 
 
+def batch_end() -> Column:
+    """End of the batch day (next midnight, UTC): when the batch is complete."""
+    return F.date_add("batch_date", 1).cast("timestamp")
+
+
 def add_rejection_reason(df: DataFrame) -> DataFrame:
     """Add rejection_reason: the first rule a row breaks, or null if it is valid.
 
@@ -60,10 +66,9 @@ def add_rejection_reason(df: DataFrame) -> DataFrame:
 
     # "Future" means after the end of the batch day, not after now(): the
     # result must not change when the job is re-run later (idempotency).
-    batch_end = F.date_add("batch_date", 1).cast("timestamp")
     reason = (
         reason.when(F.col("parsed_ts").isNull(), "malformed_timestamp")
-        .when(F.col("parsed_ts") >= batch_end, "future_timestamp")
+        .when(F.col("parsed_ts") >= batch_end(), "future_timestamp")
         # A null duration gives a null comparison, which when() treats as false.
         .when(F.col("duration_ms") < 0, "negative_duration")
     )
@@ -81,4 +86,35 @@ def deduplicate(df: DataFrame) -> DataFrame:
         df.withColumn("_row_number", F.row_number().over(first_received))
         .filter(F.col("_row_number") == 1)
         .drop("_row_number")
+    )
+
+
+def build_silver(df: DataFrame) -> DataFrame:
+    """Valid, deduplicated events with the silver.events columns and types."""
+    valid = df.filter(F.col("rejection_reason").isNull())
+    return deduplicate(valid).select(
+        "event_id",
+        "user_id",
+        "device_model",
+        "os_version",
+        "app_id",
+        "event_type",
+        F.col("parsed_ts").alias("event_ts"),
+        batch_end().alias("ingested_ts"),
+        F.col("duration_ms").cast("int").alias("duration_ms"),
+        "country",
+        "event_date",
+    )
+
+
+def write_partitions(df: DataFrame, path: str, partition_column: str) -> None:
+    """Write Parquet partitioned by a column, replacing only the partitions
+    present in df (dynamic overwrite): re-running a day is safe."""
+    (
+        # One task per partition value: one file per folder, not many tiny ones.
+        df.repartition(partition_column)
+        .write.mode("overwrite")
+        .option("partitionOverwriteMode", "dynamic")
+        .partitionBy(partition_column)
+        .parquet(path)
     )
