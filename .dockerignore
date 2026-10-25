@@ -1,0 +1,8 @@
+# Not needed to build the image: keeps the build context small.
+.git/
+.venv/
+data/
+.env
+__pycache__/
+.pytest_cache/
+.ruff_cache/
