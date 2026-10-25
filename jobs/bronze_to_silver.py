@@ -1,6 +1,6 @@
 """Bronze to silver: validate, deduplicate and type raw events."""
 
-from pyspark.sql import DataFrame, SparkSession
+from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
 from jobs.common.schemas import BRONZE_SCHEMA, CORRUPT_RECORD
@@ -68,3 +68,17 @@ def add_rejection_reason(df: DataFrame) -> DataFrame:
         .when(F.col("duration_ms") < 0, "negative_duration")
     )
     return df.withColumn("rejection_reason", reason)
+
+
+def deduplicate(df: DataFrame) -> DataFrame:
+    """Keep one row per event_id: the first received (smallest batch_date).
+
+    At-least-once delivery sends some events twice. dropDuplicates would also
+    keep one row per event_id, but gives no control over which one.
+    """
+    first_received = Window.partitionBy("event_id").orderBy("batch_date")
+    return (
+        df.withColumn("_row_number", F.row_number().over(first_received))
+        .filter(F.col("_row_number") == 1)
+        .drop("_row_number")
+    )
