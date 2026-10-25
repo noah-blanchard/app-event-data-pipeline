@@ -48,6 +48,23 @@ def column_types(conn: psycopg.Connection, table: str) -> list[tuple[str, str]]:
     return [(name, type_) for name, type_ in rows]
 
 
+def cast_column(column: str, type_: str) -> sql.Composable:
+    """SQL expression converting a staging column to the target type."""
+    if type_ == "jsonb":
+        # A line that is not valid JSON (e.g. truncated) would make ::jsonb
+        # fail the whole load: keep its text unchanged, as a JSON string.
+        return sql.SQL(
+            "CASE WHEN pg_input_is_valid({0}, 'jsonb') THEN {0}::jsonb "
+            "ELSE to_jsonb({0}) END"
+        ).format(sql.Identifier(column))
+    return sql.SQL("{}::{}").format(
+        sql.Identifier(column),
+        # psycopg only takes literal strings here, against SQL injection. The
+        # type name comes from the PostgreSQL catalog, not from user input.
+        sql.SQL(type_),  # pyright: ignore[reportArgumentType]
+    )
+
+
 def replace_rows(
     df: DataFrame, table: str, key_column: str, start: date, end: date
 ) -> int:
@@ -74,9 +91,7 @@ def replace_rows(
         columns = column_types(conn, table)
         names = sql.SQL(", ").join(sql.Identifier(c) for c, _ in columns)
         # Cast each staging column to the type of the target column.
-        casts = sql.SQL(", ").join(
-            sql.SQL("{}::{}").format(sql.Identifier(c), sql.SQL(t)) for c, t in columns
-        )
+        casts = sql.SQL(", ").join(cast_column(c, t) for c, t in columns)
         conn.execute(
             sql.SQL("DELETE FROM {} WHERE {} BETWEEN %s AND %s").format(
                 sql.Identifier(schema, name), sql.Identifier(key_column)
