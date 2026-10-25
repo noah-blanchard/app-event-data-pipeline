@@ -6,6 +6,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends openjdk-17-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
+# PostgreSQL JDBC driver: Spark needs it to write to the warehouse. The
+# checksum makes the build fail if the downloaded file is not the expected one.
+ADD --checksum=sha256:73914527305a40cce504b0d3d90b23caf565136912d607ae8ae7c5895512332c \
+    https://repo1.maven.org/maven2/org/postgresql/postgresql/42.7.14/postgresql-42.7.14.jar \
+    /opt/jars/
+ENV POSTGRES_JDBC_JAR=/opt/jars/postgresql-42.7.14.jar
+
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 
 # Keep the virtual environment outside /app: the project folder is mounted
