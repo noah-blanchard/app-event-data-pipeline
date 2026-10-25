@@ -7,6 +7,7 @@ from jobs.common.schemas import BRONZE_SCHEMA, CORRUPT_RECORD
 
 BRONZE_DIR = "data/bronze"
 SILVER_DIR = "data/silver"
+QUARANTINE_DIR = "data/quarantine"
 # ISO 8601 with milliseconds and a UTC offset, as written by the generator.
 EVENT_TS_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"
 # Columns that are NOT NULL in silver.events.
@@ -104,6 +105,25 @@ def build_silver(df: DataFrame) -> DataFrame:
         F.col("duration_ms").cast("int").alias("duration_ms"),
         "country",
         "event_date",
+    )
+
+
+def build_quarantine(df: DataFrame) -> DataFrame:
+    """Rejected rows with the silver.rejected_events columns.
+
+    raw_payload is the original event: the raw line when it could not be
+    parsed, otherwise its bronze fields as JSON, nulls included (a null value
+    is often the very reason of the rejection).
+    """
+    rejected = df.filter(F.col("rejection_reason").isNotNull())
+    bronze_fields = [f.name for f in BRONZE_SCHEMA.fields if f.name != CORRUPT_RECORD]
+    as_json = F.to_json(F.struct(*bronze_fields), {"ignoreNullFields": "false"})
+    return rejected.select(
+        F.coalesce(F.col(CORRUPT_RECORD), as_json).alias("raw_payload"),
+        F.col("rejection_reason").alias("reason"),
+        "batch_date",
+        # Audit timestamp: the only value that changes when the job is re-run.
+        F.current_timestamp().alias("rejected_ts"),
     )
 
 
