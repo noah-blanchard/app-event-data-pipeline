@@ -1,12 +1,11 @@
 """Bronze to silver: validate, deduplicate and type raw events."""
 
-import argparse
-import os
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, timedelta
 
 from pyspark.sql import Column, DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
 
+from jobs.common.cli import parse_run_args
 from jobs.common.schemas import BRONZE_SCHEMA, CORRUPT_RECORD
 from jobs.common.spark import get_spark
 
@@ -178,29 +177,8 @@ def run(spark: SparkSession, run_date: date, lookback_days: int) -> None:
     df.unpersist()
 
 
-def parse_args() -> argparse.Namespace:
-    yesterday = datetime.now(UTC).date() - timedelta(days=1)
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--date",
-        type=date.fromisoformat,
-        default=yesterday,
-        help="batch date to process, YYYY-MM-DD (default: yesterday, UTC)",
-    )
-    parser.add_argument(
-        "--lookback-days",
-        type=int,
-        default=int(os.environ.get("LOOKBACK_DAYS", "2")),
-        help="days of late events to reprocess (default: $LOOKBACK_DAYS or 2)",
-    )
-    args = parser.parse_args()
-    if args.lookback_days < 0:
-        parser.error("--lookback-days must be 0 or more")
-    return args
-
-
 def main() -> None:
-    args = parse_args()
+    args = parse_run_args(__doc__)
     spark = get_spark("bronze_to_silver")
     run(spark, args.date, args.lookback_days)
     window_start = args.date - timedelta(days=args.lookback_days)
