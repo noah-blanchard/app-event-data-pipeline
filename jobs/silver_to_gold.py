@@ -35,17 +35,43 @@ def daily_active_users(events: DataFrame, start: date, end: date) -> DataFrame:
     )
 
 
+def app_usage_daily(events: DataFrame, start: date, end: date) -> DataFrame:
+    """One row per event_date and app_id: users, sessions and their length.
+
+    A session is one app_close event: it carries the session duration. A
+    session that crosses midnight counts on the day it closes.
+    """
+    is_session = F.col("event_type") == "app_close"
+    total_duration = F.coalesce(
+        F.sum(F.when(is_session, F.col("duration_ms"))), F.lit(0)
+    )
+    return (
+        events.filter(F.col("event_date").between(start, end))
+        .groupBy("event_date", "app_id")
+        .agg(
+            F.count_distinct("user_id").alias("active_users"),
+            F.sum(F.when(is_session, 1).otherwise(0)).alias("sessions"),
+            total_duration.alias("total_duration_ms"),
+        )
+        # try_divide gives null for an app without sessions that day, where
+        # / would fail the job (Spark 4 runs in ANSI mode).
+        .withColumn("avg_session_ms", F.try_divide("total_duration_ms", "sessions"))
+    )
+
+
 def run(spark: SparkSession, run_date: date, lookback_days: int) -> None:
     """Rebuild the gold rows of the event dates rebuilt in silver for run_date."""
     window_start = run_date - timedelta(days=lookback_days)
     events = spark.read.parquet(SILVER_DIR)
-    replace_rows(
-        daily_active_users(events, window_start, run_date),
-        "gold.daily_active_users",
-        "event_date",
-        window_start,
-        run_date,
-    )
+    # Read once per gold table: keep it in memory.
+    events.cache()
+    tables = {
+        "gold.daily_active_users": daily_active_users(events, window_start, run_date),
+        "gold.app_usage_daily": app_usage_daily(events, window_start, run_date),
+    }
+    for table, df in tables.items():
+        replace_rows(df, table, "event_date", window_start, run_date)
+    events.unpersist()
 
 
 def main() -> None:
