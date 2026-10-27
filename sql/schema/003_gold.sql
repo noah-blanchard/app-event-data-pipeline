@@ -24,3 +24,26 @@ CREATE TABLE IF NOT EXISTS gold.app_usage_daily (
     avg_session_ms    DOUBLE PRECISION,
     PRIMARY KEY (event_date, app_id)
 );
+
+-- Grain: one row per day and device model.
+CREATE TABLE IF NOT EXISTS gold.device_daily (
+    event_date   DATE             NOT NULL,
+    device_model TEXT             NOT NULL,
+    active_users INTEGER          NOT NULL,
+    crash_count  INTEGER          NOT NULL,
+    -- crash_count / active_users: only meaningful with enough users.
+    crash_rate   DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (event_date, device_model)
+);
+
+-- Grain: one row per day and country.
+CREATE TABLE IF NOT EXISTS gold.country_daily (
+    event_date   DATE    NOT NULL,
+    -- Nullable in silver: the unknown country gets its own row. A primary
+    -- key forbids nulls, so the grain is a unique constraint where two
+    -- nulls count as equal.
+    country      CHAR(2),
+    active_users INTEGER NOT NULL,
+    sessions     INTEGER NOT NULL,
+    UNIQUE NULLS NOT DISTINCT (event_date, country)
+);

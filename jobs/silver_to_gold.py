@@ -59,6 +59,39 @@ def app_usage_daily(events: DataFrame, start: date, end: date) -> DataFrame:
     )
 
 
+def device_daily(events: DataFrame, start: date, end: date) -> DataFrame:
+    """One row per event_date and device_model: users, crashes, crash rate.
+
+    crash_rate = crashes / active users of that model and day. A group exists
+    only if it has events, so active_users is never 0.
+    """
+    return (
+        events.filter(F.col("event_date").between(start, end))
+        .groupBy("event_date", "device_model")
+        .agg(
+            F.count_distinct("user_id").alias("active_users"),
+            F.sum(F.when(F.col("event_type") == "crash", 1).otherwise(0)).alias(
+                "crash_count"
+            ),
+        )
+        .withColumn("crash_rate", F.col("crash_count") / F.col("active_users"))
+    )
+
+
+def country_daily(events: DataFrame, start: date, end: date) -> DataFrame:
+    """One row per event_date and country: active users and sessions."""
+    return (
+        events.filter(F.col("event_date").between(start, end))
+        .groupBy("event_date", "country")
+        .agg(
+            F.count_distinct("user_id").alias("active_users"),
+            F.sum(F.when(F.col("event_type") == "app_close", 1).otherwise(0)).alias(
+                "sessions"
+            ),
+        )
+    )
+
+
 def run(spark: SparkSession, run_date: date, lookback_days: int) -> None:
     """Rebuild the gold rows of the event dates rebuilt in silver for run_date."""
     window_start = run_date - timedelta(days=lookback_days)
@@ -68,6 +101,8 @@ def run(spark: SparkSession, run_date: date, lookback_days: int) -> None:
     tables = {
         "gold.daily_active_users": daily_active_users(events, window_start, run_date),
         "gold.app_usage_daily": app_usage_daily(events, window_start, run_date),
+        "gold.device_daily": device_daily(events, window_start, run_date),
+        "gold.country_daily": country_daily(events, window_start, run_date),
     }
     for table, df in tables.items():
         replace_rows(df, table, "event_date", window_start, run_date)
